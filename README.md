@@ -1,4 +1,6 @@
 Brief Code Explanation:
+Only the main.cpp is useful.
+try1.cpp and try2.cpp are two unsucessful attempts that should be ignored
 Struct game:
 - This struct consists of all the initialization of parameters.
 - The functions inside the struct are used to compute the price range.
