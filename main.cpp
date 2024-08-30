@@ -8,15 +8,9 @@
 
 using namespace std;
 
-// State representation for 2 firms: a pair of prices
-using State = tuple<double, double>;
-
-// State-Action pair representation
-using StateAction = tuple<State, double>;
-
 // game parameters
-struct Game
-{
+struct Game {
+
     // used in Q learning implementation
     double alpha = 0.125; // Learning rate
     double beta = 1e-5;   // the time exploration diminshes
@@ -26,12 +20,90 @@ struct Game
     double ksi = 0.1; // possible price range (not set by paper)
     int m = 15;       // discretize the price range to m equally spaced points
     // used in computing demand and reward
-    double miu = 0.25; // index of horizontal differentiation
+    double mu = 0.25; // index of horizontal differentiation
     double a = 2;      // product quality index that capture vertical differntiation
     double c = 1;      // Marginal cost
 
-    // scaler
-    int scaler = 1;
+    // Demand function for one product, considering the price of both products
+    float get_demand(double price1, double price2, int product_index) const {
+        double a_0 = 0;  // Product 0 is the outside good, so a_0 is an inverse index of aggregate demand
+        double denominator = exp(a_0 / mu);
+        denominator += exp((a - price1) / mu) + exp((a - price2) / mu);
+
+        // Compute the demand for the specified product
+        if (product_index == 0) {
+            return exp((a - price1) / mu) / denominator;
+        } else {
+            return exp((a - price2) / mu) / denominator;
+        }
+    }
+
+    // First-order condition for Nash equilibrium
+    double foc(double price1, double price2) const {
+        float demand = get_demand(price1, price2, 0);
+        double zero = 1.0 - (price1 - c) * (1.0 - demand) / mu;
+        return zero;
+    }
+
+    // First-order condition for monopoly
+    double foc_monopoly(double price1, double price2) const {
+        double demand0 = get_demand(price1, price2, 0);
+        double demand1 = get_demand(price1, price2, 1);
+        double zero = 1.0 - (price1 - c) * (1.0 - demand0) / mu + (price2 - c) * demand1 / mu;
+        return zero;
+    }
+
+    // Function to solve for the price using Newton's method
+    double solve_foc(const function<double(double)>& foc_func, double p0) const {
+        const double tolerance = 1e-6;
+        const int max_iter = 100;
+        double p = p0;
+
+        for (int i = 0; i < max_iter; ++i) {
+            double F = foc_func(p);
+            double dF_dp = (foc_func(p + 1e-6) - F) / 1e-6;  // Numerical derivative
+
+            if (fabs(dF_dp) < tolerance) {
+                cerr << "Derivative too small, stopping iteration." << endl;
+                break;
+            }
+
+            double delta_p = -F / dF_dp;
+            p += delta_p;
+
+            if (fabs(delta_p) < tolerance) {
+                break;
+            }
+        }
+
+        return p;
+    }
+
+    // Compute the price range, including competitive (Nash equilibrium) and monopoly prices
+    vector<double> get_price_range() const {
+        double p0 = 3.0 * c;  // Initial guess for price
+
+        // Solve for Nash equilibrium (competitive) price
+        double p_N = solve_foc([this](double p) { return foc(p, p); }, p0);
+
+        // Solve for monopoly price
+        double p_M = solve_foc([this](double p) { return foc_monopoly(p, p); }, p0);
+
+        // Calculate the price range
+        double low_bound = p_N - ksi * (p_M - p_N);
+        double up_bound = p_M + ksi * (p_M - p_N) ;
+        double step_size = (up_bound - low_bound) / (m - 1);
+
+        vector<double> possible_prices;
+        possible_prices.reserve(m); // Reserve space for m elements
+
+        // Fill the array using a single loop
+        for (int i = 0; i < m; ++i) {
+            possible_prices.push_back(low_bound + i * step_size);
+        }
+
+        return possible_prices;
+    }
 };
 
 /* Map state into index */
@@ -63,25 +135,7 @@ double get_q_value(int state_index, int action_index, const vector<vector<double
 void update_q_value(int state_index, int action_index, double reward, double alpha, double gamma, int next_state_index, vector<vector<double>> &Q)
 {
     double max_future_q = *max_element(Q[next_state_index].begin(), Q[next_state_index].end());
-    Q[state_index][action_index] = Q[state_index][action_index] + alpha * (reward + gamma * max_future_q - Q[state_index][action_index]);
-}
-
-/* Get price ranges */
-vector<double> get_price_range(Game &game)
-{
-    double p_N = (game.a + game.b) / (2 * game.b - game.miu); // nash equalibrium price
-    double p_M = (game.a - game.c) / (2 * game.b);            // monopoly price
-    double low_bound = p_N - game.ksi * (p_M - p_N) * game.scaler;
-    double up_bound = p_M + game.ksi * (p_M - p_N) * game.scaler;
-    double step_size = (up_bound - low_bound) / (game.m - 1);
-    vector<double> possible_prices;
-    possible_prices.reserve(game.m); // Reserve space for m elements
-    // Fill the array using a single loop
-    for (int i = 0; i < game.m; ++i)
-    {
-        possible_prices.push_back(low_bound + i * step_size);
-    }
-    return possible_prices;
+    Q[state_index][action_index] = (1 - alpha) * Q[state_index][action_index] + alpha * (reward + gamma * max_future_q);
 }
 
 /* Get actions */
@@ -109,29 +163,46 @@ double choose_action(int state_index, double epsilon, const vector<vector<double
     }
 }
 
+/* get demand */
+// int agent is an integer (0 or 1) to indicate which player it is
+float get_demand(const Game &game, double price1, double price2, int agent)
+{
+    double a_0 = 0; // product 0 is the outside good, so a_0 is an inverse index of aggregate demand
+    double denomenator = exp(a_0 / game.mu);
+    denomenator += exp((game.a - price1) / game.mu) + exp((game.a - price2) / game.mu);
+    double q;
+    if (agent == 0)
+    {
+        q = exp((game.a - price1) / game.mu) / denomenator;
+    }
+    else
+    {
+        q = exp((game.a - price2) / game.mu) / denomenator;
+    }
+    return q;
+}
+
 /* get reward */
 // int agent is an integer (0 or 1) to indicate which player it is
 // curr_price is the same as state when k = 1; but this funciton need to be re-implemented when k > 1
-float get_reward(int price_index1, int price_index2, int agent, Game &game, const vector<double> &possible_prices)
+float get_reward(int price_index1, int price_index2, int agent, const Game &game, const vector<double> &possible_prices)
 {
     double price1 = possible_prices[price_index1];
     double price2 = possible_prices[price_index2];
 
     double a_0 = 0; // product 0 is the outside good, so a_0 is an inverse index of aggregate demand
-    double denomenator = exp(a_0 / game.miu);
+    double denomenator = exp(a_0 / game.mu);
 
     // Calculate reward for agent 0
     if (agent == 0)
     {
-        denomenator += exp((game.a - price1) / game.miu) + exp((game.a - price2) / game.miu);
-        double q = exp((game.a - price1) / game.miu) / denomenator;
+        float q = get_demand(game, price1, price2, 0);
         return (price1 - game.c) * q;
     }
     // Calculate reward for agent 1
     else
     {
-        denomenator += exp((game.a - price1) / game.miu) + exp((game.a - price2) / game.miu);
-        double q = exp((game.a - price2) / game.miu) / denomenator;
+        float q = get_demand(game, price1, price2, 1);
         return (price2 - game.c) * q;
     }
 }
@@ -238,11 +309,12 @@ vector<vector<double>> initialize_q_matrix(int num_states, int m)
 }
 
 /* Simulation */
-void simulate(int state_index){
+void simulate(int state_index)
+{
     // Construct a game
     Game game;
     // Get price range
-    vector<double> possible_prices = get_price_range(game);
+    vector<double> possible_prices = game.get_price_range();
     int num_states = game.m * game.m;
     ConvergenceTracker tracker(num_states);
 
@@ -274,7 +346,7 @@ void simulate(int state_index){
         // Check convergence for Agent 1
         if (tracker.check_and_update_convergence1(state_index, action_index1))
         {
-            // cout << "Agent 1 has converged for state " << state_index << endl;
+            cout << "Agent 1 has converged for state " << state_index << endl;
         }
 
         // Update the state index to the new state after Agent 1's action
@@ -295,7 +367,7 @@ void simulate(int state_index){
         // After updating Q2 for Agent 2
         if (tracker.check_and_update_convergence2(state_index, action_index2))
         {
-            // cout << "Agent 2 has converged for state " << state_index << endl;
+            cout << "Agent 2 has converged for state " << state_index << endl;
         }
         if (tracker.has_converged())
         {
@@ -315,7 +387,7 @@ void simulate(int state_index){
         cout << "Not converged after " << iterations << " iterations." << endl;
     }
 
-    // Optionally, print the Q matrix for debugging purposes
+    // print the Q matrix for debugging purposes
     for (int i = 0; i < num_states; ++i)
     {
         auto [state_price1_index, state_price2_index] = index_to_state(i, game.m);
@@ -326,12 +398,12 @@ void simulate(int state_index){
         }
         cout << endl;
     }
-    
 }
 
 /* Simulation */
 int main()
 {
-    simulate(100);
+    // choose a random index to start
+    simulate(4);
     return 0;
 }
