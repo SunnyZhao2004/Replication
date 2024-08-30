@@ -7,7 +7,7 @@ Struct game:
 
 Q Matrix:
 - The Q matrix is defined as Q[state_index][action].
-- state_index is the combination of prices by agent 1 and agent 2.
+- state_index is the combination of prices by agent 1 and agent 2, range from 0 to 254 (total m*m states)
 - This approach is used to reduce the dimension of the Q matrix and simplify the code.
 - For the exact mapping method, please refer to the function state_to_index.
 
