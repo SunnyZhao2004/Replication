@@ -127,11 +127,6 @@ pair<int, int> index_to_state(int index, int m)
     return make_pair(index1, index2);
 }
 
-double get_q_value(int state_index, int action_index, const vector<vector<double>> &Q)
-{
-    return Q[state_index][action_index];
-}
-
 void update_q_value(int state_index, int action_index, double reward, double alpha, double gamma, int next_state_index, vector<vector<double>> &Q)
 {
     double max_future_q = *max_element(Q[next_state_index].begin(), Q[next_state_index].end());
@@ -168,8 +163,7 @@ double choose_action(int state_index, double epsilon, const vector<vector<double
 float get_demand(const Game &game, double price1, double price2, int agent)
 {
     double a_0 = 0; // product 0 is the outside good, so a_0 is an inverse index of aggregate demand
-    double denomenator = exp(a_0 / game.mu);
-    denomenator += exp((game.a - price1) / game.mu) + exp((game.a - price2) / game.mu);
+    double denomenator = exp(a_0 / game.mu) + exp((game.a - price1) / game.mu) + exp((game.a - price2) / game.mu);
     double q;
     if (agent == 0)
     {
